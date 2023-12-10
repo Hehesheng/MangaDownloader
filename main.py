@@ -73,15 +73,16 @@ def main(args):
             title = web_title.text
         except:
             title = str(int(time.time()))
-            print(f"Could not find title, rename at:{title}")
+            print(f"Could not find title, rename at:\n{title}")
 
         if target_dir == "":
             target_dir = re.split('[-\s]', title)[0]
             base_saving_dir = generate_saving_dir(target_dir)
-            print(f"Not config saving directory, saving to:{base_saving_dir}")
+            print(
+                f"Not config saving directory, saving to:\n{base_saving_dir}")
 
         print(
-            f"begin download web img, title:{title}, web url:{next_link}, img num:{img_num}")
+            f"begin download web img, title:\n{title},\nweb url:{next_link},\nimg num:{img_num}")
 
         saving_dir = os.path.join(base_saving_dir, title)
         if not os.path.exists(saving_dir):
@@ -99,7 +100,7 @@ def main(args):
         pbar.close()
         next_link = get_next_link(soup, base_url, processed_urls)
         if next_link is not None:
-            print(f"find next link:{next_link}, continue")
+            print(f"find next link:\n{next_link}\ncontinue downloading")
 
 
 if __name__ == "__main__":
