@@ -1,17 +1,15 @@
-import requests
-from bs4 import BeautifulSoup
 import os
 import re
 import time
-from concurrent.futures import ThreadPoolExecutor
 import argparse
+
+import requests
+from bs4 import BeautifulSoup
+from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlparse
 from tqdm import tqdm
 
-proxies = {
-    'http': 'http://172.24.0.1:7890',
-    'https': 'http://172.24.0.1:7890',
-}
+from proxies import proxies
 
 
 def download_img(base_url, img_url, i, file_name_len, saving_dir, title):
@@ -43,7 +41,7 @@ def get_next_link(soup, base_url, processed_urls) -> str:
 
 def generate_saving_dir(name) -> str:
     root_dir = "./download/"
-    if name == "":
+    if name is None:
         return root_dir
     return root_dir + name + '/'
 
@@ -75,7 +73,7 @@ def main(args):
             title = str(int(time.time()))
             print(f"Could not find title, rename at:\n{title}")
 
-        if target_dir == "":
+        if target_dir is None:
             target_dir = re.split('[-\s]', title)[0]
             base_saving_dir = generate_saving_dir(target_dir)
             print(
@@ -108,7 +106,7 @@ if __name__ == "__main__":
         prog='manga downloader', description='Download images from a given URL.')
     parser.add_argument('url', default="", type=str,
                         help='The URL to download images from.')
-    parser.add_argument('-d', '--dir', default="", type=str,
+    parser.add_argument('-d', '--dir', default=None, type=str,
                         help='The directory to download images from.')
     parser.add_argument('-t', '--thread', default=8,
                         type=int, help='The downloader threads.')
