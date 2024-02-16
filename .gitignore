@@ -2,3 +2,4 @@ download
 .venv
 .vscode
 complete
+__pycache__
