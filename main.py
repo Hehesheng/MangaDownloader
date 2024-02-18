@@ -13,6 +13,7 @@ import aiofiles
 
 from proxies import http_proxy
 
+proxy_url = None
 
 def print_run(func: Callable) -> Callable:
     async def wrapper(*args, **kw):
@@ -47,7 +48,7 @@ async def download_img(session: aiohttp.ClientSession,
     if re.match('^(http|https):\/\/.*', img_url) is None:
         req_url = base_url + img_url
     img_data = None
-    async with session.get(req_url, proxy=http_proxy) as img_request_res:
+    async with session.get(req_url, proxy=proxy_url) as img_request_res:
         img_data = img_request_res.content
         split_res = re.split('[/.]', img_url)
         img_name = str(i+1).zfill(file_name_len) + "." + split_res[-1]
@@ -83,6 +84,8 @@ def generate_saving_dir(name) -> str:
 
 async def process_loop(session: aiohttp.ClientSession,
                        args) -> None:
+    global proxy_url
+    proxy_url = http_proxy if args.proxy else None
     next_link: str = args.url
     target_dir: str = args.dir
     base_saving_dir: str = generate_saving_dir(target_dir)
@@ -93,7 +96,7 @@ async def process_loop(session: aiohttp.ClientSession,
         parsed_url = urlparse(next_link)
         base_url: str = parsed_url.scheme + "://" + parsed_url.netloc
         soup: Optional[BeautifulSoup] = None
-        async with session.get(next_link, proxy=http_proxy) as response:
+        async with session.get(next_link, proxy=proxy_url) as response:
             soup: BeautifulSoup = BeautifulSoup(await response.text(), 'html.parser')
 
         img_tags = soup.find_all('img')
@@ -168,5 +171,7 @@ if __name__ == "__main__":
                         help='The directory to download images from.')
     parser.add_argument('-t', '--thread', default=8,
                         type=int, help='The downloader threads.')
+    parser.add_argument('-p', '--proxy', action='store_true',
+                        help='enable proxy with proxies.py')
     args = parser.parse_args()
     asyncio.run(main(args))
