@@ -2,27 +2,62 @@ import os
 import re
 import time
 import argparse
-
-import requests
-from bs4 import BeautifulSoup
-from concurrent.futures import ThreadPoolExecutor
+import asyncio
 from urllib.parse import urlparse
+from typing import Callable, Any, Optional
+
+import aiohttp
+from bs4 import BeautifulSoup
 from tqdm import tqdm
+import aiofiles
 
-from proxies import proxies
+from proxies import http_proxy
 
 
-def download_img(base_url, img_url, i, file_name_len, saving_dir, title):
+def print_run(func: Callable) -> Callable:
+    async def wrapper(*args, **kw):
+        print(f'call in: {func.__name__}, args: {args}, kw: {kw}')
+        await func(*args, **kw)
+        print(f'call out: {func.__name__}, args: {args}, kw: {kw}')
+    return wrapper
+
+
+async def async_download_img(semaphore: asyncio.Semaphore,
+                             session: aiohttp.ClientSession,
+                             base_url: str,
+                             img_url: str,
+                             i: int,
+                             file_name_len: int,
+                             saving_dir: str,
+                             title: str) -> None:
+    async with semaphore:
+        await download_img(session, base_url, img_url, i,
+                           file_name_len, saving_dir, title)
+
+
+async def download_img(session: aiohttp.ClientSession,
+                       base_url: str,
+                       img_url: str,
+                       i: int,
+                       file_name_len: int,
+                       saving_dir: str,
+                       title: str) -> None:
     # print(f"download {title} page {i+1}")
-    img_request_res = requests.get(base_url+img_url, proxies=proxies)
-    img_data = img_request_res.content
-    split_res = re.split('[/.]', img_url)
-    img_name = str(i+1).zfill(file_name_len) + "." + split_res[-1]
-    with open(os.path.join(saving_dir, img_name), 'wb') as handler:
-        handler.write(img_data)
+    req_url = img_url
+    if re.match('^(http|https):\/\/.*', img_url) is None:
+        req_url = base_url + img_url
+    img_data = None
+    async with session.get(req_url, proxy=http_proxy) as img_request_res:
+        img_data = img_request_res.content
+        split_res = re.split('[/.]', img_url)
+        img_name = str(i+1).zfill(file_name_len) + "." + split_res[-1]
+        async with aiofiles.open(os.path.join(saving_dir, img_name), mode='wb') as handler:
+            await handler.write(await img_data.read())
 
 
-def get_next_link(soup, base_url, processed_urls) -> str:
+def get_next_link(soup: BeautifulSoup,
+                  base_url: str,
+                  processed_urls: list[str]) -> str:
     p_tag = soup.find(lambda tag: tag.name == "p" and "下一" in tag.text)
     if p_tag is not None:
         return base_url + p_tag.find('a')['href']
@@ -46,20 +81,20 @@ def generate_saving_dir(name) -> str:
     return root_dir + name + '/'
 
 
-def main(args):
-    if args.url == "":
-        return
-    next_link = args.url
-    target_dir = args.dir
-    base_saving_dir = generate_saving_dir(target_dir)
-    max_threads = args.thread
-    processed_urls = []
+async def process_loop(session: aiohttp.ClientSession,
+                       args) -> None:
+    next_link: str = args.url
+    target_dir: str = args.dir
+    base_saving_dir: str = generate_saving_dir(target_dir)
+    max_threads: int = args.thread
+    processed_urls: list[str] = []
     while next_link is not None:
         processed_urls.append(next_link)
         parsed_url = urlparse(next_link)
-        base_url = parsed_url.scheme + "://" + parsed_url.netloc
-        response = requests.get(next_link, proxies=proxies)
-        soup = BeautifulSoup(response.text, 'html.parser')
+        base_url: str = parsed_url.scheme + "://" + parsed_url.netloc
+        soup: Optional[BeautifulSoup] = None
+        async with session.get(next_link, proxy=http_proxy) as response:
+            soup: BeautifulSoup = BeautifulSoup(await response.text(), 'html.parser')
 
         img_tags = soup.find_all('img')
         img_num = len(img_tags)
@@ -87,18 +122,41 @@ def main(args):
             os.makedirs(saving_dir)
             print(f"mkdir:{title}")
 
+        desc_title = title if (len(title) <= 50) else title[:50-3] + '...'
         pbar = tqdm(total=img_num,
-                    desc=f"Downloading {title}", unit="image")
-        with ThreadPoolExecutor(max_workers=max_threads) as executor:
-            for i, img_tag in enumerate(img_tags):
-                img_url = img_tag['src']
-                executor.submit(download_img, base_url, img_url, i,
-                                file_name_len, saving_dir, title).add_done_callback(lambda p: pbar.update())
+                    desc=f"Downloading {desc_title}", unit="image")
+        sem = asyncio.Semaphore(value=max_threads)
+        task_list: list[asyncio.Task] = []
+        for i, img_tag in enumerate(img_tags):
+            img_url = img_tag['src']
+            task = asyncio.create_task(async_download_img(sem, session, base_url, img_url, i,
+                                                          file_name_len, saving_dir, title))
 
+            def download_task_done_callback(fu: asyncio.Task):
+                pbar.update()
+            task.add_done_callback(download_task_done_callback)
+            task_list.append(task)
+            yield
+        await asyncio.gather(*task_list)
         pbar.close()
+
         next_link = get_next_link(soup, base_url, processed_urls)
         if next_link is not None:
             print(f"find next link:\n{next_link}\ncontinue downloading")
+
+
+async def main(args):
+    if args.url == "":
+        return
+    next_link: str = args.url
+    target_dir: str = args.dir
+    base_saving_dir: str = generate_saving_dir(target_dir)
+    max_threads: int = args.thread
+    processed_urls: list[str] = []
+    async with aiohttp.ClientSession() as session:
+        async for _ in process_loop(session, args):
+            # do nothing
+            pass
 
 
 if __name__ == "__main__":
@@ -111,4 +169,4 @@ if __name__ == "__main__":
     parser.add_argument('-t', '--thread', default=8,
                         type=int, help='The downloader threads.')
     args = parser.parse_args()
-    main(args)
+    asyncio.run(main(args))
